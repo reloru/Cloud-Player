@@ -1,0 +1,29 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	// Worker name — free in this account as of repo setup (checked via
+	// workers_list: get-it, voice-agent, patchbay, music-editor, gitframe,
+	// dev-proto, screenshot-cropper, jarvis-assistant, invar-sub, crosbynews).
+	"name": "cloud-player",
+	// Entry point does not exist yet — this is the first file the
+	// implementation session must create. See ../docs/HANDOFF.md.
+	"main": "src/index.ts",
+	"compatibility_date": "2026-09-02",
+	// Serves the PWA's static files (HTML/manifest/service worker/icons).
+	// account_id is intentionally omitted: wrangler reads CLOUDFLARE_ACCOUNT_ID
+	// from the environment (confirmed in Cloudflare docs, System Environment
+	// Variables page) rather than needing it hardcoded here.
+	"assets": {
+		"directory": "./public",
+		"binding": "ASSETS"
+	},
+	"observability": {
+		"enabled": true
+	},
+	// Non-secret config the implementation session must add once the user
+	// supplies the tunnel's public hostname for the VM music API, e.g.:
+	// "vars": { "MUSIC_API_ORIGIN": "https://music-api.<user-domain>" }
+	//
+	// The auth password must NOT go here — set it with:
+	//   npx wrangler secret put AUTH_PASSWORD
+	"vars": {}
+}
