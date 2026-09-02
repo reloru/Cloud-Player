@@ -52,7 +52,8 @@ var state = {
   shuffle: false,
   repeat: 'off',
   scrubbing: false,
-  loading: false
+  loading: false,
+  loadFailed: false
 };
 
 /* -- credentials --------------------------------------------------------- */
@@ -247,6 +248,7 @@ function loadLibrary() {
     .then(function (payload) {
       state.songs = (payload && payload.songs) || [];
       state.loading = false;
+      state.loadFailed = false;
       renderLibrary();
       // Clear only the banner this function put up. An upload summary is also
       // styled as an error when something was skipped or failed, and a refresh
@@ -260,6 +262,7 @@ function loadLibrary() {
     .catch(function (error) {
       state.loading = false;
       state.songs = [];
+      state.loadFailed = true;
       renderLibrary();
       libraryBannerShown = true;
       showStatus('Could not reach the library: ' + error.message, true, true);
@@ -287,7 +290,28 @@ function renderLibrary() {
 
   if (state.visible.length === 0) {
     el.empty.hidden = false;
-    if (state.songs.length === 0) {
+    el.empty.textContent = '';
+    if (state.loadFailed) {
+      // Never say "no music" here. The library is empty only because the
+      // request failed; the tracks are still on the VM, and claiming
+      // otherwise reads as data loss.
+      el.empty.appendChild(document.createTextNode(
+        'Can’t reach your library. Your music is still on the VM — ' +
+        'this is a connection problem, nothing has been lost.'
+      ));
+      el.empty.appendChild(document.createElement('br'));
+      var retry = document.createElement('button');
+      retry.type = 'button';
+      retry.className = 'sheet-btn';
+      retry.style.marginTop = '16px';
+      retry.textContent = 'Try again';
+      retry.addEventListener('click', function () {
+        retry.disabled = true;
+        retry.textContent = 'Checking…';
+        loadLibrary();
+      });
+      el.empty.appendChild(retry);
+    } else if (state.songs.length === 0) {
       el.empty.textContent = state.loading
         ? 'Loading…'
         : 'No music yet. Tap the upload button to add tracks from Files.';
