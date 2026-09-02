@@ -1,134 +1,166 @@
 # Handoff: Cloud Player
 
-This session did repository setup only — no application code. The next
-session implements the app described below.
+This repo has been set up (config, directory layout, and one piece of live
+Cloudflare infrastructure) but has no application code yet. The next
+session writes `worker/src/index.ts`, `worker/public/`, and `vm-api/`.
 
-## Repo state after this session
+## Repo state after setup
 
 ```
 worker/
-  wrangler.jsonc     real config, but main points at src/index.ts which
-                      does not exist yet — create it first
+  wrangler.jsonc     real config: assets binding for the PWA, and a
+                      vpc_services binding to the VM music API (see below).
+                      main points at src/index.ts, which does not exist yet.
   package.json        wrangler 4.128.0, typescript 7.0.2,
                       @cloudflare/workers-types 5.20260902.1 (devDependencies,
-                      versions read from the npm registry this session, not
-                      installed — run npm install before first use)
+                      not installed — run npm install before first use)
   tsconfig.json
-  src/                empty
+  src/                empty — write index.ts here first
   public/             empty — PWA static assets go here
 vm-api/
-  README.md            placeholder only
+  README.md            placeholder only — write the Python API here
 docs/
   HANDOFF.md           this file
 ```
 
-`worker/` and `vm-api/` are two separate deployables from one repo: `worker/`
-is pushed with `wrangler deploy`; `vm-api/` is pulled and run on the Ubuntu
-VM over the user's Termius session, which this session cannot reach.
+`worker/` and `vm-api/` are two separate deployables from one repo:
+`worker/` is pushed with `wrangler deploy`; `vm-api/` is pulled and run on
+the Ubuntu VM over the user's Termius session, which no Claude Code session
+in this environment can reach directly.
 
 ## Task
 
 Build a minimal personal music PWA:
 
 ```
-iPhone --HTTPS--> Cloudflare Worker --(existing Cloudflare Tunnel "VM")--> Ubuntu VM (music API, /music)
+iPhone --HTTPS--> Cloudflare Worker --(Workers VPC Service, over the existing "VM" tunnel)--> Ubuntu VM :8000 (music API, /music)
 ```
 
 Worker (`worker/`):
-- Serves the PWA (static assets via the `assets` binding already configured
-  in `worker/wrangler.jsonc`).
-- Proxies music API requests to the VM through the existing tunnel.
+- Serves the PWA via the `assets` binding already configured.
+- Proxies music API requests to the VM via the `MUSIC_API` VPC Service
+  binding already configured (`env.MUSIC_API.fetch(...)`) — not a public
+  hostname, not a `fetch()` to an external URL.
 - Routes:
   - `GET /api/songs` — public
   - `GET /api/stream/:id` — public, must support Range requests end to end
+    (client Range header -> VM API -> Worker response, all three hops)
   - `POST /api/upload` — requires auth
   - `DELETE /api/delete/:id` — requires auth
-- Auth: simple password check enforced in the Worker, only for upload and
-  delete. Store the password as a Worker secret (`wrangler secret put
-  AUTH_PASSWORD`), never in `vars` or committed config.
+- Auth (decided this session): the client caches the password after first
+  entry (e.g. `localStorage`) and sends it as `Authorization: Bearer
+  <password>` on upload/delete requests only. The Worker compares it
+  against the `AUTH_PASSWORD` secret (`wrangler secret put AUTH_PASSWORD`
+  — no value exists yet, the user provides it). No sessions, no cookies, no
+  KV/DB.
+- Stream the upload body through to the VPC Service (`request.body` piped,
+  not buffered) — Workers have a 128 MB memory limit, and Cloudflare caps
+  inbound request bodies at 100 MB on Free/Pro, 200 MB on Business (source:
+  developers.cloudflare.com/workers/platform/limits/). That cap governs
+  the largest file this app can accept; fine for individual tracks.
 
 VM music API (`vm-api/`):
+- **Language (decided this session): Python, standard library only**
+  (`http.server` or similar). The user had no preference; Python is chosen
+  because a Python stack is already on the VM per the environment notes in
+  CLAUDE.md, so it needs no new installs. Confirm what's actually on the
+  VM before assuming a specific Python version or module availability —
+  this session could not check the VM directly.
 - Stores files under `/music`, handles filesystem ops and metadata.
 - Supports HTTP Range requests for streaming (`Accept-Ranges`,
   `Content-Range`, `Content-Length`, correct `Content-Type`).
 - Supports streaming uploads — do not buffer whole files in memory.
-- Language/framework choice was left to the implementation session; nothing
-  is installed on the VM by this session and this session cannot verify
-  what's already there. The VM has cloudflared, Node, a Python stack, and
-  gh/wrangler per the environment notes in CLAUDE.md — confirm what's
-  actually available before picking a stack, don't assume.
+- **Must listen on `localhost:8000`.** That exact host/port is already
+  registered as the VPC Service target (see below) — a different port
+  means recreating the VPC Service.
 
 PWA (`worker/public/`):
 - Installable on iPhone (manifest + service worker).
 - Browse library, play via `<audio>`, pick files via the iOS Files picker,
-  upload, delete (upload/delete require login).
+  upload, delete (upload/delete require login — see auth above).
 - Minimal, mobile-friendly, no framework unless it earns its keep.
 
-Constraints carried over from the task: no Workers VPC, no database/queue/
-object storage, smallest working version first, don't invent infrastructure
-values.
+Constraints carried over from the original task, still in force: no
+database/queue/object storage, smallest working version first, don't
+invent infrastructure values that aren't already pinned down below. The
+original spec said "do not use Workers VPC" — that's been reversed (see
+below); everything else in the original spec stands.
 
-## Infrastructure values the user must still provide
+## Infrastructure already configured — do not recreate
 
-None of these were invented and none exist in this repo yet:
+- **Tunnel**: named "VM", id `a2b9bc89-8a31-4406-8ad5-47d4923efd7b`,
+  status healthy at time of setup. Already connected to the Ubuntu VM;
+  nothing to do here.
+- **VPC Service**: id `01a06084-afb3-7651-935c-59e35fa26e66`, name
+  `music-api`, type `http`, target `localhost:8000` over the tunnel above.
+  Created this session with `wrangler vpc service create music-api --type
+  http --tunnel-id a2b9bc89-8a31-4406-8ad5-47d4923efd7b --hostname
+  localhost --http-port 8000`. Already wired into `worker/wrangler.jsonc`
+  as the `MUSIC_API` binding.
+- Why VPC Services and not a public hostname route: the original spec
+  banned Workers VPC and (implicitly) pointed toward a published
+  application route on the tunnel — a public DNS hostname anyone on the
+  internet could hit directly. That conflicts with the same spec's "the
+  API should remain behind Cloudflare, not exposed to the internet," and
+  since all auth is enforced in the Worker, a public hostname would let
+  anyone skip the Worker and hit upload/delete on the VM API directly.
+  Workers VPC Services was confirmed (Cloudflare docs, Workers VPC pages)
+  to prevent exactly that: the binding can only reach the one registered
+  host:port, nothing else is exposed, and no domain/DNS record is needed
+  at all. Cost: Workers VPC is in beta per Cloudflare's own docs (APIs may
+  still change), and it needed the account's Connectivity Directory Admin
+  role to create — that role was implicitly available (the create command
+  succeeded with the account's existing `CLOUDFLARE_API_TOKEN`).
 
-1. **Public hostname for the VM music API.** Workers VPC is explicitly
-   excluded, so the Worker must reach the VM API over a normal HTTPS
-   `fetch()`. The mechanism, confirmed against Cloudflare's Tunnel routing
-   docs (developers.cloudflare.com/cloudflare-one/networks/routes/add-routes/
-   and developers.cloudflare.com/tunnel/routing/): add a **Published
-   application** route on the existing "VM" tunnel (Cloudflare dashboard →
-   Networking → Tunnels → VM → Routes → Add route → Published application),
-   giving it a subdomain on a domain already on the user's Cloudflare
-   account, with **Service URL** pointing at wherever the VM API ends up
-   listening locally (e.g. `http://localhost:8787`). That hostname becomes
-   the Worker's upstream origin (`MUSIC_API_ORIGIN` in `worker/wrangler.jsonc`
-   `vars`). Needed: a domain on the account, and the VM-local port the API
-   will bind to. One documented caveat: public hostname routes proxy through
-   Cloudflare, and on Free/Pro/Business plans the service-specific terms
-   require a specific paid service for serving video/large files — worth
-   the user's attention since this proxies audio files (source: the routing
-   doc above).
-2. **AUTH_PASSWORD** — the login password, set as a Worker secret. No value
-   exists; the user supplies it when the implementation session runs
-   `wrangler secret put AUTH_PASSWORD`.
-3. **Worker deployment target** — `worker/wrangler.jsonc` has no `routes` or
-   custom domain, so it will deploy to the default `*.workers.dev`
-   subdomain unless the user wants a custom domain, which would need to be
-   named explicitly.
+## What the user still needs to provide
 
-## Confirmed this session (so the next one doesn't re-derive it)
+Only one thing remains, and it's deliberate (a secret, not something to
+generate or guess):
 
-- Cloudflare account (via `workers_list`, this session's Cloudflare
-  Developer Platform MCP connection) currently has no Worker named
-  `cloud-player` — the name in `worker/wrangler.jsonc` is free. Existing
-  Workers: get-it, voice-agent, patchbay, music-editor, gitframe, dev-proto,
-  screenshot-cropper, jarvis-assistant, invar-sub, crosbynews.
-- `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_ZONE_ID` are present as
-  environment variables in this session's environment. Per Cloudflare's
-  Wrangler docs (system-environment-variables, and the Profiles page's
-  account-selection order), Wrangler reads `CLOUDFLARE_ACCOUNT_ID` from the
-  environment automatically, so `account_id` was deliberately left out of
-  `wrangler.jsonc`. Whether these same env vars are present in the next
-  session's environment was not checked and should not be assumed.
-- The `Cloudflare_MCP` connector (Tunnel/Zero Trust management) failed to
-  connect in this session (404, CLIENT_HTTP_NOT_IMPLEMENTED) — tunnel route
-  configuration could not be attempted or verified here, only researched
-  against docs. Retry it in the implementation session before assuming it's
-  unavailable.
+1. **`AUTH_PASSWORD`** — the login password. Set it by running `npx
+   wrangler secret put AUTH_PASSWORD` in `worker/` and entering a value
+   when prompted.
+
+Everything else that was previously listed as "needed from the user" (a
+domain for a public hostname, the tunnel ID, the VM's local port, the auth
+mechanism, the VM API's language) has been resolved above.
+
+## Confirmed this session
+
+- `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` are present as
+  environment variables in this session's environment and were used
+  directly — via the Cloudflare REST API (`GET
+  /accounts/{account_id}/cfd_tunnel`) to find the tunnel, and via `wrangler
+  vpc service create` (which reads `CLOUDFLARE_API_TOKEN` automatically) to
+  create the VPC Service. Whether these same env vars are present in the
+  next session's environment was not checked and should not be assumed —
+  if they're missing, the tunnel ID and VPC Service ID recorded above are
+  still valid and don't need to be re-derived.
+- No Worker named `cloud-player` existed in the account before this setup
+  (checked via `workers_list`).
+- The `Cloudflare_MCP` connector (a separate MCP tool for Zero
+  Trust/Tunnel management) failed to connect this session (404,
+  CLIENT_HTTP_NOT_IMPLEMENTED) — the tunnel lookup and VPC Service creation
+  above were done via direct Cloudflare REST API calls and the `wrangler`
+  CLI instead, both using the env credentials. Retry the connector next
+  session if it would help; it wasn't required.
 - `npx wrangler`, `npm`, and registry access all work in this environment;
-  package versions above were read from the npm registry directly (not
-  guessed).
+  `worker/package.json` versions were read from the npm registry directly.
+- Cloudflare's published Workers limits (developers.cloudflare.com/workers/
+  platform/limits/): request body size 100 MB (Free/Pro) / 200 MB
+  (Business); response body size has no enforced limit — relevant to
+  upload size and to streaming large audio files, respectively.
 
 ## Suggested order for the implementation session
 
-1. Retry the `Cloudflare_MCP` connector; if it connects, use it (or ask the
-   user) to confirm the tunnel's current routes and get the required domain
-   value instead of guessing.
-2. Get the two required values above from the user (domain for the public
-   hostname, and confirm the VM API's local port) — ask, don't assume.
-3. Write `worker/src/index.ts` (routing + auth) and the `vm-api/` service.
-4. Write the PWA under `worker/public/`.
-5. Wire `MUSIC_API_ORIGIN` into `worker/wrangler.jsonc` `vars` and set
-   `AUTH_PASSWORD` via `wrangler secret put`.
-6. `npm install` in `worker/`, then `wrangler dev` / deploy.
+1. Write `vm-api/` (Python stdlib, listens on `localhost:8000`, `/music`
+   filesystem access, Range support, streaming upload handling). Confirm
+   what's actually on the VM (Python version, etc.) before assuming.
+2. Write `worker/src/index.ts`: routing, the four API routes proxying
+   through `env.MUSIC_API`, and the bearer-password auth check on
+   upload/delete.
+3. Write the PWA under `worker/public/`.
+4. Get `AUTH_PASSWORD` from the user and set it via `wrangler secret put`.
+5. `npm install` in `worker/`, then `wrangler dev` (uses `remote: true` on
+   the VPC Service binding to reach the real tunnel even in local dev) and
+   `wrangler deploy`.
