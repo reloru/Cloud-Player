@@ -1,0 +1,40 @@
+# systemd unit for the Cloud Player music API.
+#
+#   sudo cp cloud-player-api.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now cloud-player-api
+#
+# Edit User, Group, MUSIC_DIR and ExecStart to match the box before enabling.
+# The music directory must be writable by User, or uploads and metadata edits
+# will fail with 500.
+
+[Unit]
+Description=Cloud Player music API
+Documentation=https://github.com/reloru/Cloud-Player
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+Environment=MUSIC_DIR=/music
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 /opt/cloud-player/vm-api/music_api.py
+Restart=on-failure
+RestartSec=3
+
+# The API only ever reads and writes the music directory, and only ever
+# listens on loopback - the tunnel is what reaches it.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+ReadWritePaths=/music
+
+[Install]
+WantedBy=multi-user.target
