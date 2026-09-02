@@ -19,10 +19,19 @@
 	"observability": {
 		"enabled": true
 	},
-	// Non-secret config the implementation session must add once the user
-	// supplies the tunnel's public hostname for the VM music API, e.g.:
-	// "vars": { "MUSIC_API_ORIGIN": "https://music-api.<user-domain>" }
-	//
+	// Reaches the VM music API through the existing "VM" Cloudflare Tunnel
+	// (a2b9bc89-8a31-4406-8ad5-47d4923efd7b) without a public hostname or
+	// Workers VPC Network — this is a single-target VPC Service, created
+	// this session with `wrangler vpc service create`, bound to
+	// localhost:8000 on the tunnel. The VM music API must listen on that
+	// exact host/port. In code: `await env.MUSIC_API.fetch("http://localhost:8000/...")`.
+	"vpc_services": [
+		{
+			"binding": "MUSIC_API",
+			"service_id": "01a06084-afb3-7651-935c-59e35fa26e66",
+			"remote": true
+		}
+	],
 	// The auth password must NOT go here — set it with:
 	//   npx wrangler secret put AUTH_PASSWORD
 	"vars": {}

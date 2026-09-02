@@ -3,13 +3,14 @@
 Personal music PWA.
 
 ```
-iPhone --HTTPS--> Cloudflare Worker --(existing Cloudflare Tunnel "VM")--> Ubuntu VM (music API, /music)
+iPhone --HTTPS--> Cloudflare Worker --(Workers VPC Service, over the existing "VM" tunnel)--> Ubuntu VM :8000 (music API, /music)
 ```
 
-Status: repository scaffolding only. No application code exists yet — see
-`docs/HANDOFF.md` for the full spec, what's already set up, and what the
-next session still needs (including infrastructure values only the user
-can supply).
+Status: repository and Cloudflare infrastructure are set up (Worker config,
+a Workers VPC Service binding the Worker to the VM over the existing
+tunnel); no application code exists yet. See `docs/HANDOFF.md` for the
+full spec, what's already configured, and what's left (just the
+`AUTH_PASSWORD` secret).
 
 - `worker/` — the Cloudflare Worker: serves the PWA and proxies
   `/api/songs`, `/api/stream/:id`, `/api/upload`, `/api/delete/:id` to the
