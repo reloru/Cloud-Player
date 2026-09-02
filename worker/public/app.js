@@ -4,6 +4,14 @@
 var PASSWORD_KEY = 'cloudplayer.password';
 var REPEAT_MODES = ['off', 'all', 'one'];
 
+/* Mirrors AUDIO_TYPES in vm-api/music_api.py. The file input carries no accept
+   attribute (see index.html), so this is what keeps a stray PDF from being
+   uploaded only to come back as a 400. */
+var AUDIO_EXTENSIONS = [
+  '.mp3', '.m4a', '.aac', '.flac', '.wav', '.aif', '.aiff',
+  '.ogg', '.oga', '.opus', '.wma'
+];
+
 var el = {
   library: document.getElementById('library'),
   empty: document.getElementById('empty'),
@@ -166,6 +174,17 @@ function formatTime(seconds) {
     : minutes + ':' + pad(secs);
 }
 
+function hasAudioExtension(filename) {
+  var lower = String(filename || '').toLowerCase();
+  for (var i = 0; i < AUDIO_EXTENSIONS.length; i++) {
+    var ext = AUDIO_EXTENSIONS[i];
+    if (lower.length > ext.length && lower.lastIndexOf(ext) === lower.length - ext.length) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function songById(id) {
   for (var i = 0; i < state.songs.length; i++) {
     if (state.songs[i].id === id) {
@@ -219,6 +238,9 @@ function subtitleOf(song) {
 
 /* -- library ------------------------------------------------------------- */
 
+/** True while the "could not reach the library" banner is the visible status. */
+var libraryBannerShown = false;
+
 function loadLibrary() {
   state.loading = true;
   return api('/api/songs')
@@ -226,9 +248,12 @@ function loadLibrary() {
       state.songs = (payload && payload.songs) || [];
       state.loading = false;
       renderLibrary();
-      // Clear a stale failure banner, but leave an "Added 3 tracks" style
-      // confirmation alone - a refresh normally follows one.
-      if (el.status.classList.contains('error')) {
+      // Clear only the banner this function put up. An upload summary is also
+      // styled as an error when something was skipped or failed, and a refresh
+      // always follows an upload - clearing by CSS class wiped those before
+      // they could be read.
+      if (libraryBannerShown) {
+        libraryBannerShown = false;
         clearStatus();
       }
     })
@@ -236,6 +261,7 @@ function loadLibrary() {
       state.loading = false;
       state.songs = [];
       renderLibrary();
+      libraryBannerShown = true;
       showStatus('Could not reach the library: ' + error.message, true, true);
     });
 }
@@ -759,10 +785,11 @@ function uploadOne(file, onProgress) {
   });
 }
 
-function uploadAll(files) {
+function uploadAll(files, skipped) {
   var queue = Array.prototype.slice.call(files);
   var done = 0;
   var failures = [];
+  skipped = skipped || 0;
 
   showStatus('Uploading 1 of ' + queue.length + '…', false, true);
   var bar = document.createElement('div');
@@ -773,11 +800,18 @@ function uploadAll(files) {
 
   function step() {
     if (queue.length === 0) {
+      // Any "skipped" notice has to ride along with this final message: shown
+      // on its own before the upload starts, the progress line overwrites it
+      // a moment later and it is never read.
+      var tail = skipped > 0
+        ? ' Skipped ' + skipped + ' non-audio file' + (skipped === 1 ? '' : 's') + '.'
+        : '';
       if (failures.length === 0) {
-        showStatus('Added ' + done + (done === 1 ? ' track.' : ' tracks.'));
+        showStatus('Added ' + done + (done === 1 ? ' track.' : ' tracks.') + tail,
+                   skipped > 0);
       } else {
         showStatus(
-          done + ' added, ' + failures.length + ' failed: ' + failures.join('; '),
+          done + ' added, ' + failures.length + ' failed: ' + failures.join('; ') + tail,
           true
         );
       }
@@ -850,14 +884,26 @@ el.fileInput.addEventListener('change', function () {
   if (!files || files.length === 0) {
     return;
   }
-  var chosen = Array.prototype.slice.call(files);
+  var picked = Array.prototype.slice.call(files);
   el.fileInput.value = '';
-  uploadAll(chosen).catch(function (error) {
+
+  var chosen = picked.filter(function (file) {
+    return hasAudioExtension(file.name);
+  });
+  var skipped = picked.length - chosen.length;
+  if (chosen.length === 0) {
+    showStatus(
+      'Not an audio file. Supported: ' + AUDIO_EXTENSIONS.join(' ') + '.',
+      true
+    );
+    return;
+  }
+  uploadAll(chosen, skipped).catch(function (error) {
     if (error && error.status === 401) {
       setPassword('');
       showStatus('Sign in again to upload.', true);
       openLoginSheet('add music', function () {
-        return uploadAll(chosen);
+        return uploadAll(chosen, skipped);
       });
       return;
     }
